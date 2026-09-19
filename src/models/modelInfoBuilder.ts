@@ -6,7 +6,12 @@
  */
 
 import { OpenAIModel } from '../api/types';
-import { describeModel, friendlyModelName, inferModelFamily } from './modelDisplay';
+import {
+  describeModel,
+  friendlyModelName,
+  inferModelFamily,
+  modelIdPrefix,
+} from './modelDisplay';
 import {
   hasSeparateOutputWindow,
   serverReportedContext,
@@ -15,11 +20,29 @@ import {
 import { TOKEN_CONSTANTS } from '../chat/tokenBudget';
 
 /**
- * Grey right-hand label rendered in the VS Code chat model picker. Matches the
- * shape native Copilot Chat BYOK providers use (e.g. `detail: 'Anthropic'`),
- * which is what visually groups all of our models under the provider.
+ * Grey right-hand label rendered next to the model in VS Code's chat model
+ * picker. Matches the shape native Copilot Chat BYOK providers use (e.g.
+ * `detail: 'Anthropic'`). Grouping in the picker is by vendor, not by this
+ * string, so it may vary per model.
  */
 export const PROVIDER_DETAIL_LABEL = 'LLM Gateway';
+
+/**
+ * Picker `detail` for a model id. Ids with a prefix — a Hugging-Face org on
+ * vLLM, or the upstream provider behind an aggregator like LiteLLM / Open
+ * WebUI — append it to the provider label (`LLM Gateway · openrouter`), which
+ * is what VS Code documents `detail` for: distinguishing models of the same
+ * name. Unprefixed ids keep the plain label (issue #99).
+ *
+ * Current VS Code builds hide `detail` in the list whenever more than one
+ * provider group is shown (always the case next to Copilot's own models), so
+ * this alone doesn't guarantee visibility — `resolveDisplayNames` keeps the
+ * full id as `name` for genuine collisions, which is what the user sees.
+ */
+export function providerDetailLabel(modelId: string): string {
+  const prefix = modelIdPrefix(modelId);
+  return prefix ? `${PROVIDER_DETAIL_LABEL} · ${prefix}` : PROVIDER_DETAIL_LABEL;
+}
 
 /**
  * Cost-tier multiplier surfaced to Copilot Chat. Set to 0 so BYOK / self-hosted
@@ -37,6 +60,12 @@ export interface BuildModelInfoInput {
   readonly defaultMaxTokens: number;
   readonly defaultMaxOutputTokens: number;
   readonly capabilities: ModelCapabilities;
+  /**
+   * Picker `name` chosen with the whole model list in view (see
+   * `resolveDisplayNames`), so ids that share a friendly name can keep their
+   * full id. Defaults to the friendly (post-slash) name.
+   */
+  readonly displayName?: string;
   /**
    * User-configured context window for this model (from the
    * `modelContextWindows` setting). Wins over everything else.
@@ -114,6 +143,7 @@ export function buildModelInfo({
   defaultMaxTokens,
   defaultMaxOutputTokens,
   capabilities,
+  displayName,
   contextOverride,
   discoveredContext,
   discoveredMaxOutput,
@@ -164,16 +194,20 @@ export function buildModelInfo({
   const description = describeModel(model);
   const tooltip = description ? `${model.id} — ${description}` : model.id;
   const friendlyName = friendlyModelName(model.id);
+  const name = displayName ?? friendlyName;
 
   const info: BuildModelInfoResult['info'] = {
     id: model.id,
-    name: friendlyName,
+    name,
     family: inferModelFamily(model.id),
+    // Deliberately not `name`: `version` is a selector lookup value
+    // (`LanguageModelChatSelector.version`), so it must not change just
+    // because a second upstream started serving the same model name.
     version: friendlyName,
     maxInputTokens,
     maxOutputTokens,
     capabilities,
-    detail: PROVIDER_DETAIL_LABEL,
+    detail: providerDetailLabel(model.id),
     tooltip,
     isUserSelectable: true,
     multiplierNumeric: PROVIDER_MULTIPLIER_NUMERIC,

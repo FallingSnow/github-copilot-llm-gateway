@@ -4,6 +4,7 @@ import {
   PROVIDER_DETAIL_LABEL,
   PROVIDER_MULTIPLIER_NUMERIC,
   buildModelInfo,
+  providerDetailLabel,
 } from '../modelInfoBuilder';
 import { TOKEN_CONSTANTS } from '../../chat/tokenBudget';
 import { OpenAIModel } from '../../api/types';
@@ -19,15 +20,31 @@ function baseModel(overrides: Partial<OpenAIModel> = {}): OpenAIModel {
 }
 
 describe('buildModelInfo first-party look-and-feel fields', () => {
-  test('sets detail to the provider label so the picker groups models', () => {
+  test('sets detail to the provider label for unprefixed ids', () => {
     const { info } = buildModelInfo({
-      model: baseModel(),
+      model: baseModel({ id: 'gpt-4o-mini' }),
       defaultMaxTokens: 8192,
       defaultMaxOutputTokens: 2048,
       capabilities: {},
     });
     assert.equal(info.detail, PROVIDER_DETAIL_LABEL);
     assert.equal(info.detail, 'LLM Gateway');
+  });
+
+  test('appends the id prefix to detail so same-name models from different upstreams differ (issue #99)', () => {
+    const { info } = buildModelInfo({
+      model: baseModel({ id: 'openrouter/deepseek-chat' }),
+      defaultMaxTokens: 8192,
+      defaultMaxOutputTokens: 2048,
+      capabilities: {},
+    });
+    assert.equal(info.detail, 'LLM Gateway · openrouter');
+    assert.equal(info.name, 'deepseek-chat');
+  });
+
+  test('providerDetailLabel keeps the plain label for unprefixed ids', () => {
+    assert.equal(providerDetailLabel('llama3'), 'LLM Gateway');
+    assert.equal(providerDetailLabel('Qwen/Qwen3-8B'), 'LLM Gateway · Qwen');
   });
 
   test('sets multiplierNumeric to 0 so BYOK models do not appear premium', () => {
@@ -63,6 +80,20 @@ describe('buildModelInfo id-derived fields', () => {
     assert.equal(info.name, 'Llama-3.1-8B-Instruct');
     assert.equal(info.version, 'Llama-3.1-8B-Instruct');
     assert.equal(info.id, 'meta-llama/Llama-3.1-8B-Instruct');
+  });
+
+  test('uses displayName for name but keeps version stable when the catalog supplies one (issue #99)', () => {
+    const { info } = buildModelInfo({
+      model: baseModel({ id: 'openrouter/deepseek-chat' }),
+      defaultMaxTokens: 8192,
+      defaultMaxOutputTokens: 2048,
+      capabilities: {},
+      displayName: 'openrouter/deepseek-chat',
+    });
+    assert.equal(info.name, 'openrouter/deepseek-chat');
+    assert.equal(info.id, 'openrouter/deepseek-chat');
+    // `version` is a selector lookup value and must not follow the display name.
+    assert.equal(info.version, 'deepseek-chat');
   });
 
   test('infers a known family when the id matches', () => {
