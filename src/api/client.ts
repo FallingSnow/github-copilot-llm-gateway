@@ -140,6 +140,25 @@ const DISCOVERY_PROBE_TIMEOUT_MS = 3000;
  */
 const DISCOVERY_SHOW_TIMEOUT_MS = 5000;
 
+/**
+ * Timeout for LiteLLM's one-shot `GET /model/info`, which doubles as the
+ * LiteLLM detection probe. Unlike `/api/version` it does real work per
+ * deployment (cost-map enrichment, team-access lookups when a DB is
+ * configured), so a large proxy needs more than the Ollama probe's budget —
+ * and a timeout is cached as "not LiteLLM" for the config generation.
+ */
+const DISCOVERY_MODEL_INFO_TIMEOUT_MS = 10000;
+
+/**
+ * Outcome of the `/model/info` probe. Distinguished so the discovery log can
+ * say what actually happened — a 401 from a misconfigured key and a 404 from
+ * a non-LiteLLM server both mean "no metadata", but only one is actionable.
+ */
+export type LiteLLMModelInfoProbe =
+  | { readonly kind: 'ok'; readonly body: unknown }
+  | { readonly kind: 'http'; readonly status: number }
+  | { readonly kind: 'unreachable'; readonly reason: string };
+
 const SSE_DATA_PREFIX = 'data: ';
 const SSE_DONE_LINE = 'data: [DONE]';
 const ERROR_PREFIX = 'Inference server reported an error mid-stream: ';
@@ -635,6 +654,35 @@ export class GatewayClient {
       return await response.json();
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * Fetch LiteLLM's per-deployment metadata via the proxy's native
+   * `GET /model/info` endpoint (issue #100). One request describes every
+   * model, so `LiteLLMDiscovery` calls this once per config generation.
+   * Returns the raw JSON body — parsing lives in `discovery/litellmDiscovery`
+   * — or the failure kind: the HTTP status (a 404 from every other backend, a
+   * 401 from a LiteLLM key without access) or the network/timeout reason.
+   */
+  public async fetchLiteLLMModelInfo(
+    cancellationToken?: vscode.CancellationToken
+  ): Promise<LiteLLMModelInfoProbe> {
+    const base = normalizeBaseUrl(this.config.serverUrl);
+    try {
+      const response = await this.fetchWithTimeout(
+        `${base}/model/info`,
+        { method: 'GET', headers: this.getHeaders() },
+        cancellationToken,
+        DISCOVERY_MODEL_INFO_TIMEOUT_MS
+      );
+      if (!response.ok) { return { kind: 'http', status: response.status }; }
+      return { kind: 'ok', body: await response.json() };
+    } catch (error) {
+      const reason = error instanceof Error && error.name === 'AbortError'
+        ? `timed out after ${DISCOVERY_MODEL_INFO_TIMEOUT_MS}ms or cancelled`
+        : error instanceof Error ? error.message : String(error);
+      return { kind: 'unreachable', reason };
     }
   }
 
